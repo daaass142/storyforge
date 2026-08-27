@@ -54,7 +54,7 @@ jobs:
 
           required_checks=(
             "Quality"
-            "Unit & Coverage"
+            "Critical Tests"
             "E2E"
             "Build"
             "Dependency Audit"

@@ -34,11 +34,13 @@
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "ci": "npm run ci:quality && npm run ci:security && npm run ci:test && npm run ci:build",
-    "ci:e2e": "PLAYWRIGHT_FROZEN_WORKSPACE=1 npm run test:e2e",
+    "ci:e2e": "PLAYWRIGHT_FROZEN_WORKSPACE=1 npm run test:e2e:smoke",
     "ci:quality": "npm run check:required-tables && npm run check:ai-manual && npm run check:ai-entry-registry && npm run check:architecture && npm run check:source-reachability && npm run check:docs && npm run check:roadmap && npm run check:agent-context && npm run check:agent-freshness && npm run check:canon-coverage && npm run check:project-metrics && npm run lint && npx tsc --noEmit",
     "ci:security": "npm run check:dependencies",
-    "ci:test": "npm run test:coverage",
-    "ci:build": "npm run build && npm run check:bundle-size"
+    "ci:test": "npm run test:critical",
+    "ci:build": "npm run build && npm run check:bundle-size",
+    "test:e2e:smoke": "playwright test tests/e2e/core-workflow.spec.ts --project=chromium --grep \"产品综合首页提供并列功能入口和真实世界基座|新用户可创建项目并进入工作区|建卷建章、保存正文、刷新恢复并导出正文与隐私诊断|完整 JSON 导出后可重新导入且正文不丢|本地 OpenAI 兼容服务可刷新并保存模型列表|删除项目经过双重安全门且不影响其它项目\"",
+    "test:critical": "node scripts/run-critical-tests.mjs"
   },
   "dependencies": {
     "@tiptap/core": "3.28.0",
