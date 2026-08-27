@@ -46,7 +46,7 @@ flowchart TB
 
 | 当前事实 | 数值 | 单一事实源 |
 |---|---:|---|
-| 应用语义版本 | `3.9.1` | `package.json` |
+| 应用语义版本 | `3.10.0` | `package.json` |
 | TypeScript 生产源码 | 993 个文件 / 356456 行 | `tsconfig.json` |
 | IndexedDB schema | v79 / 115 张 required tables | `schema.ts` / `REQUIRED_TABLES` |
 | PROJECT_TABLES | 115 张表 | `project-tables.ts` |
