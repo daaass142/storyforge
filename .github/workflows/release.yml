@@ -344,23 +344,24 @@ jobs:
       - name: Prepare release notes
         shell: bash
         run: |
-          cat > release/RELEASE-NOTES.md <<EOF
-          ## StoryForge ${RELEASE_TAG}
+          set -euo pipefail
+          cat > release/RELEASE-NOTES.md <<'EOF'
+          ## StoryForge __TAG__
 
           这是**已经编译完成的正式版**，不再要求用户下载源码后自行执行 `npm install` / `npm run build`。
 
           ### 推荐下载
 
-          - **Windows x64**：`StoryForge-${VERSION}-windows-x64.zip`
+          - **Windows x64**：`StoryForge-__VERSION__-windows-x64.zip`
             - 解压后双击 `StoryForge.bat`
             - 已自带 Node.js 运行时
-          - **Linux x64**：`StoryForge-${VERSION}-linux-x64.tar.gz`
+          - **Linux x64**：`StoryForge-__VERSION__-linux-x64.tar.gz`
             - 解压后运行 `./storyforge.sh`
             - 已自带 Node.js 运行时
-          - **Linux ARM64**：`StoryForge-${VERSION}-linux-arm64.tar.gz`
+          - **Linux ARM64**：`StoryForge-__VERSION__-linux-arm64.tar.gz`
             - 解压后运行 `./storyforge.sh`
             - 已自带 Node.js 运行时
-          - **通用 Web 编译包**：`StoryForge-${VERSION}-web.zip`
+          - **通用 Web 编译包**：`StoryForge-__VERSION__-web.zip`
             - 只有编译产物和本地服务器脚本
             - 使用系统 Node.js 运行 `node server.mjs`
 
@@ -370,8 +371,8 @@ jobs:
 
           ### 构建信息
 
-          - Tag: `${RELEASE_TAG}`
-          - Commit: `${TARGET_SHA}`
+          - Tag: `__TAG__`
+          - Commit: `__SHA__`
           - 生产依赖审计：通过
           - Production build：通过
           - Bundle size gate：通过
@@ -379,6 +380,11 @@ jobs:
 
           `SHA256SUMS.txt` 可用于校验下载文件完整性。
           EOF
+          sed -i \
+            -e "s/__TAG__/${RELEASE_TAG}/g" \
+            -e "s/__VERSION__/${VERSION}/g" \
+            -e "s/__SHA__/${TARGET_SHA}/g" \
+            release/RELEASE-NOTES.md
 
       - name: Point release tag at exact build commit
         if: github.event_name == 'workflow_dispatch'
