@@ -6,6 +6,12 @@
 
 ## Unreleased
 
+## v3.10.2 — 2026-08-28 · 恢复新版设置入口
+
+- 在新版产品综合首页右上角新增“设置”按钮，直接进入现有 AI 服务商、API Key、Base URL、模型与本地偏好配置页。
+- 移动端产品导航同步增加“设置”入口，避免只能手动输入 /settings 地址访问配置页。
+- Release 工作流支持以 `release:` 开头的 main 提交直接构建并发布对应 package.json 版本，继续生成 Windows、Linux 与 Web 编译包。
+
 ## v3.10.1 — 2026-08-28 · GitHub Actions 与发布门优化
 
 - 将单体 CI 拆分为 Quality、Tests、Build、Security 与 Release 生命周期工作流，发布只提升已经通过检查的提交，不重复执行整套测试。

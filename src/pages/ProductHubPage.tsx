@@ -17,6 +17,7 @@ import {
   MessageCircle,
   Plus,
   Search,
+  Settings,
   ShieldCheck,
   Sparkles,
   Store,
@@ -191,12 +192,14 @@ function ProductHeader({
   onOpenCreate,
   onOpenMobileNav,
   onOpenWorldPicker,
+  onOpenSettings,
 }: {
   activeTab: TabId
   onSelect: (tab: TabId) => void
   onOpenCreate: () => void
   onOpenMobileNav: () => void
   onOpenWorldPicker: () => void
+  onOpenSettings: () => void
 }) {
   return (
     <header className="sf-header">
@@ -214,6 +217,7 @@ function ProductHeader({
         <div className="sf-header-actions">
           <button className="sf-icon-button sf-mobile-menu" onClick={onOpenMobileNav} title="打开导航" aria-label="打开导航"><Menu className="h-4 w-4" /></button>
           <button className="sf-icon-button" onClick={onOpenWorldPicker} title="搜索世界" aria-label="搜索世界"><Search className="h-4 w-4" /></button>
+          <button className="sf-icon-button" onClick={onOpenSettings} title="设置" aria-label="设置"><Settings className="h-4 w-4" /></button>
           <Button variant="primary" icon={Plus} onClick={onOpenCreate}>新建</Button>
           <button className="sf-avatar" title="本地工作区" aria-label="本地工作区">林</button>
         </div>
@@ -491,8 +495,8 @@ function WorldPicker({ worlds, onClose, onChoose }: { worlds: ProductWorld[]; on
   return <div className="sf-modal-backdrop" onMouseDown={onClose}><aside className="sf-picker-panel" onMouseDown={event => event.stopPropagation()}><div className="sf-modal-header"><div><div className="sf-eyebrow">WORLD SOURCE</div><h2>选择一个世界</h2><p>功能会读取你选择的世界版本。</p></div><button className="sf-icon-button" onClick={onClose} title="关闭" aria-label="关闭"><X className="h-4 w-4" /></button></div><div className="sf-picker-input"><Search className="h-4 w-4" /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="输入世界名称或编号" autoFocus /></div><div className="sf-picker-list">{results.map(world => <button key={world.code} onClick={() => { onChoose(world); onClose() }}><WorldGlyph accent={world.accent} small /><span><strong>{world.name}</strong><small><Hash className="h-3 w-3" />{world.code} · v{world.version}</small></span><ChevronRight className="h-4 w-4" /></button>)}{results.length === 0 && <div className="sf-picker-empty"><Search className="h-5 w-5" /><span>没有找到这个世界</span><small>检查编号是否完整。</small></div>}</div><div className="sf-picker-footer"><button disabled><ShieldCheck className="h-4 w-4" />社区世界接入准备中</button></div></aside></div>
 }
 
-function MobileNavPanel({ activeTab, onClose, onSelect }: { activeTab: TabId; onClose: () => void; onSelect: (tab: TabId) => void }) {
-  return <div className="sf-modal-backdrop sf-mobile-nav-backdrop" onMouseDown={onClose}><aside className="sf-mobile-nav-panel" onMouseDown={event => event.stopPropagation()}><div className="sf-modal-header"><div><div className="sf-eyebrow">STORYFORGE</div><h2>产品页签</h2></div><button className="sf-icon-button" onClick={onClose} title="关闭" aria-label="关闭"><X className="h-4 w-4" /></button></div><nav>{NAV_TABS.map(tab => { const Icon = tab.icon; return <button key={tab.id} className={activeTab === tab.id ? 'active' : ''} onClick={() => { onSelect(tab.id); onClose() }}><span><Icon className="h-4 w-4" /></span><strong>{tab.label}</strong>{activeTab === tab.id ? <Check className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button> })}</nav></aside></div>
+function MobileNavPanel({ activeTab, onClose, onSelect, onOpenSettings }: { activeTab: TabId; onClose: () => void; onSelect: (tab: TabId) => void; onOpenSettings: () => void }) {
+  return <div className="sf-modal-backdrop sf-mobile-nav-backdrop" onMouseDown={onClose}><aside className="sf-mobile-nav-panel" onMouseDown={event => event.stopPropagation()}><div className="sf-modal-header"><div><div className="sf-eyebrow">STORYFORGE</div><h2>产品页签</h2></div><button className="sf-icon-button" onClick={onClose} title="关闭" aria-label="关闭"><X className="h-4 w-4" /></button></div><nav>{NAV_TABS.map(tab => { const Icon = tab.icon; return <button key={tab.id} className={activeTab === tab.id ? 'active' : ''} onClick={() => { onSelect(tab.id); onClose() }}><span><Icon className="h-4 w-4" /></span><strong>{tab.label}</strong>{activeTab === tab.id ? <Check className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button> })}<button onClick={() => { onOpenSettings(); onClose() }}><span><Settings className="h-4 w-4" /></span><strong>设置</strong><ChevronRight className="h-4 w-4" /></button></nav></aside></div>
 }
 
 export default function ProductHubPage() {
@@ -597,5 +601,5 @@ export default function ProductHubPage() {
     }
   }
 
-  return <div className="sf-product-shell"><ProductHeader activeTab={activeTab} onSelect={selectTab} onOpenCreate={() => setShowCreate(true)} onOpenMobileNav={() => setShowMobileNav(true)} onOpenWorldPicker={() => setShowWorldPicker(true)} /><main className="sf-product-main">{renderPage()}</main><footer className="sf-product-footer"><span>StoryForge 产品综合页 · 本地数据</span><span><ShieldCheck className="h-3.5 w-3.5" />世界版本与功能实例分开管理</span></footer>{showCreate && <CreatePanel onClose={() => setShowCreate(false)} onCreated={(kind, id) => { setActiveProjectId(id); setActiveTab(kind); setShowCreate(false); if (kind === 'novel') navigate(`/workspace/${id}?module=outline`) }} />}{showWorldPicker && <WorldPicker worlds={worlds} onClose={() => setShowWorldPicker(false)} onChoose={selectWorld} />}{showMobileNav && <MobileNavPanel activeTab={activeTab} onClose={() => setShowMobileNav(false)} onSelect={selectTab} />}</div>
+  return <div className="sf-product-shell"><ProductHeader activeTab={activeTab} onSelect={selectTab} onOpenCreate={() => setShowCreate(true)} onOpenMobileNav={() => setShowMobileNav(true)} onOpenWorldPicker={() => setShowWorldPicker(true)} onOpenSettings={() => navigate('/settings')} /><main className="sf-product-main">{renderPage()}</main><footer className="sf-product-footer"><span>StoryForge 产品综合页 · 本地数据</span><span><ShieldCheck className="h-3.5 w-3.5" />世界版本与功能实例分开管理</span></footer>{showCreate && <CreatePanel onClose={() => setShowCreate(false)} onCreated={(kind, id) => { setActiveProjectId(id); setActiveTab(kind); setShowCreate(false); if (kind === 'novel') navigate(`/workspace/${id}?module=outline`) }} />}{showWorldPicker && <WorldPicker worlds={worlds} onClose={() => setShowWorldPicker(false)} onChoose={selectWorld} />}{showMobileNav && <MobileNavPanel activeTab={activeTab} onClose={() => setShowMobileNav(false)} onSelect={selectTab} onOpenSettings={() => navigate('/settings')} />}</div>
 }

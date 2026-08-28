@@ -2,6 +2,8 @@ name: Release Compiled Package
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -35,6 +37,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' || startsWith(github.event.head_commit.message, 'release:')
     name: Build and publish compiled runtime
     runs-on: ubuntu-latest
     env:
@@ -66,6 +69,11 @@ jobs:
 
           echo "TARGET_SHA=${TARGET_SHA}" >> "${GITHUB_ENV}"
           echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+          if [ "${GITHUB_REF_TYPE}" = "branch" ]; then
+            RELEASE_TAG="${EXPECTED_TAG}"
+            echo "RELEASE_TAG=${RELEASE_TAG}" >> "${GITHUB_ENV}"
+          fi
 
           if [ "${RELEASE_TAG}" != "${EXPECTED_TAG}" ]; then
             echo "Release tag ${RELEASE_TAG} does not match package version ${EXPECTED_TAG}." >&2
@@ -387,7 +395,7 @@ jobs:
             release/RELEASE-NOTES.md
 
       - name: Point release tag at exact build commit
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || github.ref_type == 'branch'
         shell: bash
         run: |
           set -euo pipefail
