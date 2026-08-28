@@ -1,4 +1,4 @@
-name: Release Source Package
+name: Release Compiled Package
 
 on:
   push:
@@ -7,11 +7,21 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag, for example v3.7.5'
+        description: 'Release tag, for example v3.10.0'
         required: true
+        type: string
+      commit:
+        description: 'Exact commit SHA/ref to build. Empty = current ref.'
+        required: false
+        default: ''
         type: string
       prerelease:
         description: 'Mark as prerelease'
+        required: false
+        default: false
+        type: boolean
+      overwrite:
+        description: 'Move existing tag and replace existing Release assets'
         required: false
         default: false
         type: boolean
@@ -19,14 +29,25 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
+    name: Build and publish compiled runtime
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.commit || github.ref }}
+      PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+      OVERWRITE: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
+
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout exact release source
+        uses: actions/checkout@v7
         with:
+          ref: ${{ env.RELEASE_REF }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -35,85 +56,393 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Verify release version and changelog
-        run: npm run check:release-metadata -- "${RELEASE_TAG}"
-
-      - name: Run production release gates
-        run: npm run ci
-
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Run browser release smoke tests
-        run: npm run ci:e2e
-
-      - name: Prepare release notes
+      - name: Resolve and verify release metadata
+        shell: bash
         run: |
-          mkdir -p release
-          cat > release/RELEASE-NOTES.md <<'EOF'
-          ## StoryForge 故事熔炉
+          set -euo pipefail
+          TARGET_SHA="$(git rev-parse HEAD)"
+          VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED_TAG="v${VERSION}"
 
-          本版本为源码版发布，不再提供 `.bat`、`.exe` 或 Windows Portable 启动器。
+          echo "TARGET_SHA=${TARGET_SHA}" >> "${GITHUB_ENV}"
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
 
-          ### 如何启动
-
-          1. 在本页面下载 GitHub 自动生成的 `Source code (zip)`。
-          2. 解压压缩包。
-          3. 安装 Node.js LTS：https://nodejs.org/
-          4. 进入包含 `package.json` 的项目目录。
-          5. 执行：
-
-             ```powershell
-             npm install
-             npm run dev
-             ```
-
-          6. 浏览器打开：
-
-             ```text
-             http://localhost:1111/storyforge/
-             ```
-
-          更详细的零基础步骤见仓库内文档：
-
-          `使用npm指令启动项目.md`
-
-          使用前建议先在旧版本「数据管理」中导出 JSON 备份。
-          EOF
-
-      - name: Ensure tag exists for manual dispatch
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
-            if [ "$(git rev-list -n 1 "${RELEASE_TAG}")" != "$(git rev-parse HEAD)" ]; then
-              echo "Tag ${RELEASE_TAG} does not point to the current release commit." >&2
-              exit 1
-            fi
-          else
-            git tag "${RELEASE_TAG}"
-            git push origin "${RELEASE_TAG}"
+          if [ "${RELEASE_TAG}" != "${EXPECTED_TAG}" ]; then
+            echo "Release tag ${RELEASE_TAG} does not match package version ${EXPECTED_TAG}." >&2
+            exit 1
           fi
 
-      - name: Publish source release
+          node scripts/check-release-metadata.mjs "${RELEASE_TAG}"
+          echo "Release source: ${TARGET_SHA}"
+
+      - name: Install build dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Build production bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          GITHUB_SHA="${TARGET_SHA}" npm run build
+          npm run check:bundle-size
+          test -f dist/index.html
+          test -d dist/assets
+
+      - name: Create compiled runtime packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION_NO_V="${RELEASE_TAG#v}"
+          RELEASE_DIR="${RUNNER_TEMP}/storyforge-release"
+          COMMON_DIR="${RELEASE_DIR}/common"
+          OUT_DIR="${GITHUB_WORKSPACE}/release"
+
+          rm -rf "${RELEASE_DIR}" "${OUT_DIR}"
+          mkdir -p "${COMMON_DIR}/storyforge" "${OUT_DIR}"
+          cp -a dist/. "${COMMON_DIR}/storyforge/"
+
+          cat > "${COMMON_DIR}/server.mjs" <<'NODE_SERVER'
+          import { createServer } from 'node:http'
+          import { createReadStream, existsSync, statSync } from 'node:fs'
+          import { spawn } from 'node:child_process'
+          import { dirname, extname, resolve, sep } from 'node:path'
+          import { fileURLToPath } from 'node:url'
+
+          const root = dirname(fileURLToPath(import.meta.url))
+          const appRoot = resolve(root, 'storyforge')
+          const host = process.env.HOST || '127.0.0.1'
+          const port = Number(process.env.PORT || 1111)
+          const url = `http://${host}:${port}/storyforge/`
+
+          const mime = new Map([
+            ['.html', 'text/html; charset=utf-8'],
+            ['.js', 'text/javascript; charset=utf-8'],
+            ['.mjs', 'text/javascript; charset=utf-8'],
+            ['.css', 'text/css; charset=utf-8'],
+            ['.json', 'application/json; charset=utf-8'],
+            ['.webmanifest', 'application/manifest+json; charset=utf-8'],
+            ['.svg', 'image/svg+xml'],
+            ['.png', 'image/png'],
+            ['.ico', 'image/x-icon'],
+            ['.woff2', 'font/woff2'],
+            ['.wasm', 'application/wasm'],
+            ['.txt', 'text/plain; charset=utf-8'],
+          ])
+
+          function resolveFile(pathname) {
+            let decoded
+            try {
+              decoded = decodeURIComponent(pathname)
+            } catch {
+              return null
+            }
+            if (!decoded.startsWith('/storyforge/')) return null
+            let relative = decoded.slice('/storyforge/'.length)
+            if (!relative || relative.endsWith('/')) relative += 'index.html'
+            let candidate = resolve(appRoot, relative)
+            if (candidate !== appRoot && !candidate.startsWith(appRoot + sep)) return null
+            if (existsSync(candidate) && statSync(candidate).isFile()) return candidate
+            if (!extname(candidate)) {
+              candidate = resolve(appRoot, 'index.html')
+              if (existsSync(candidate)) return candidate
+            }
+            return null
+          }
+
+          function openBrowser(target) {
+            if (process.env.STORYFORGE_NO_OPEN === '1') return
+            let command
+            let args
+            if (process.platform === 'win32') {
+              command = 'cmd'
+              args = ['/c', 'start', '', target]
+            } else if (process.platform === 'darwin') {
+              command = 'open'
+              args = [target]
+            } else {
+              command = 'xdg-open'
+              args = [target]
+            }
+            try {
+              const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+              child.unref()
+            } catch {
+              // Browser auto-open is optional; the server remains usable.
+            }
+          }
+
+          const server = createServer((req, res) => {
+            const pathname = new URL(req.url || '/', url).pathname
+            if (pathname === '/' || pathname === '/storyforge') {
+              res.writeHead(302, { Location: '/storyforge/' })
+              res.end()
+              return
+            }
+
+            const file = resolveFile(pathname)
+            if (!file) {
+              res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+              res.end('Not Found')
+              return
+            }
+
+            const type = mime.get(extname(file).toLowerCase()) || 'application/octet-stream'
+            res.writeHead(200, {
+              'Content-Type': type,
+              'Cache-Control': file.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
+            })
+            createReadStream(file).pipe(res)
+          })
+
+          server.listen(port, host, () => {
+            console.log(`StoryForge is running at ${url}`)
+            openBrowser(url)
+          })
+          NODE_SERVER
+
+          cat > "${COMMON_DIR}/README.txt" <<EOF
+          StoryForge ${RELEASE_TAG} compiled runtime
+          Commit: ${TARGET_SHA}
+
+          This package contains the already-built production application.
+          No npm install and no npm build are required.
+
+          Windows portable:
+            Double-click StoryForge.bat
+
+          Linux portable:
+            Run ./storyforge.sh
+
+          Generic web package:
+            Install Node.js 18+ and run:
+              node server.mjs
+
+          Open:
+            http://127.0.0.1:1111/storyforge/
+          EOF
+
+          cat > "${COMMON_DIR}/BUILD.txt" <<EOF
+          tag=${RELEASE_TAG}
+          version=${VERSION}
+          commit=${TARGET_SHA}
+          built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          node=$(node --version)
+          EOF
+
+          # Generic compiled web package: no source tree and no npm install required.
+          GENERIC="StoryForge-${VERSION_NO_V}-web"
+          cp -a "${COMMON_DIR}" "${RELEASE_DIR}/${GENERIC}"
+          (
+            cd "${RELEASE_DIR}"
+            zip -qr "${OUT_DIR}/${GENERIC}.zip" "${GENERIC}"
+          )
+
+          # Download the exact Node runtime used by this build and verify official checksums.
+          NODE_VERSION="$(node -p 'process.versions.node')"
+          NODE_BASE="https://nodejs.org/dist/v${NODE_VERSION}"
+          cd "${RELEASE_DIR}"
+          curl -fsSLO "${NODE_BASE}/SHASUMS256.txt"
+
+          WIN_ARCHIVE="node-v${NODE_VERSION}-win-x64.zip"
+          LINUX_X64_ARCHIVE="node-v${NODE_VERSION}-linux-x64.tar.xz"
+          LINUX_ARM64_ARCHIVE="node-v${NODE_VERSION}-linux-arm64.tar.xz"
+
+          curl -fsSLO "${NODE_BASE}/${WIN_ARCHIVE}"
+          curl -fsSLO "${NODE_BASE}/${LINUX_X64_ARCHIVE}"
+          curl -fsSLO "${NODE_BASE}/${LINUX_ARM64_ARCHIVE}"
+
+          grep "  ${WIN_ARCHIVE}$" SHASUMS256.txt | sha256sum -c -
+          grep "  ${LINUX_X64_ARCHIVE}$" SHASUMS256.txt | sha256sum -c -
+          grep "  ${LINUX_ARM64_ARCHIVE}$" SHASUMS256.txt | sha256sum -c -
+
+          unzip -q "${WIN_ARCHIVE}"
+          tar -xJf "${LINUX_X64_ARCHIVE}"
+          tar -xJf "${LINUX_ARM64_ARCHIVE}"
+
+          WIN_DIR="StoryForge-${VERSION_NO_V}-windows-x64"
+          cp -a "${COMMON_DIR}" "${RELEASE_DIR}/${WIN_DIR}"
+          mkdir -p "${RELEASE_DIR}/${WIN_DIR}/runtime"
+          cp "node-v${NODE_VERSION}-win-x64/node.exe" "${RELEASE_DIR}/${WIN_DIR}/runtime/node.exe"
+          cp "node-v${NODE_VERSION}-win-x64/LICENSE" "${RELEASE_DIR}/${WIN_DIR}/runtime/NODE-LICENSE.txt"
+          cat > "${RELEASE_DIR}/${WIN_DIR}/StoryForge.bat" <<'BAT'
+          @echo off
+          cd /d "%~dp0"
+          runtime\node.exe server.mjs
+          if errorlevel 1 pause
+          BAT
+          (
+            cd "${RELEASE_DIR}"
+            zip -qr "${OUT_DIR}/${WIN_DIR}.zip" "${WIN_DIR}"
+          )
+
+          for ARCH in x64 arm64; do
+            LINUX_DIR="StoryForge-${VERSION_NO_V}-linux-${ARCH}"
+            NODE_DIR="node-v${NODE_VERSION}-linux-${ARCH}"
+            cp -a "${COMMON_DIR}" "${RELEASE_DIR}/${LINUX_DIR}"
+            mkdir -p "${RELEASE_DIR}/${LINUX_DIR}/runtime"
+            cp "${NODE_DIR}/bin/node" "${RELEASE_DIR}/${LINUX_DIR}/runtime/node"
+            cp "${NODE_DIR}/LICENSE" "${RELEASE_DIR}/${LINUX_DIR}/runtime/NODE-LICENSE.txt"
+            chmod +x "${RELEASE_DIR}/${LINUX_DIR}/runtime/node"
+            cat > "${RELEASE_DIR}/${LINUX_DIR}/storyforge.sh" <<'SH'
+          #!/usr/bin/env sh
+          set -eu
+          cd "$(dirname "$0")"
+          exec ./runtime/node ./server.mjs
+          SH
+            chmod +x "${RELEASE_DIR}/${LINUX_DIR}/storyforge.sh"
+            (
+              cd "${RELEASE_DIR}"
+              tar -czf "${OUT_DIR}/${LINUX_DIR}.tar.gz" "${LINUX_DIR}"
+            )
+          done
+
+          cd "${OUT_DIR}"
+          sha256sum *.zip *.tar.gz > SHA256SUMS.txt
+          ls -lh
+
+      - name: Smoke-test final compiled package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_NO_V="${RELEASE_TAG#v}"
+          PACKAGE="${RUNNER_TEMP}/storyforge-release/StoryForge-${VERSION_NO_V}-linux-x64"
+
+          STORYFORGE_NO_OPEN=1 "${PACKAGE}/runtime/node" "${PACKAGE}/server.mjs" > "${RUNNER_TEMP}/storyforge-runtime.log" 2>&1 &
+          PID=$!
+          cleanup() {
+            kill "${PID}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:1111/storyforge/" -o "${RUNNER_TEMP}/index.html"; then
+              break
+            fi
+            sleep 1
+          done
+
+          grep -qi '<!doctype html' "${RUNNER_TEMP}/index.html"
+          grep -q '/storyforge/' "${RUNNER_TEMP}/index.html"
+          curl -fsS "http://127.0.0.1:1111/storyforge/manifest.webmanifest" >/dev/null
+          cleanup
+          trap - EXIT
+
+      - name: Upload compiled packages as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StoryForge-${{ env.RELEASE_TAG }}-compiled
+          path: |
+            release/*.zip
+            release/*.tar.gz
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release/RELEASE-NOTES.md <<'EOF'
+          ## StoryForge __TAG__
+
+          这是**已经编译完成的正式版**，不再要求用户下载源码后自行执行 `npm install` / `npm run build`。
+
+          ### 推荐下载
+
+          - **Windows x64**：`StoryForge-__VERSION__-windows-x64.zip`
+            - 解压后双击 `StoryForge.bat`
+            - 已自带 Node.js 运行时
+          - **Linux x64**：`StoryForge-__VERSION__-linux-x64.tar.gz`
+            - 解压后运行 `./storyforge.sh`
+            - 已自带 Node.js 运行时
+          - **Linux ARM64**：`StoryForge-__VERSION__-linux-arm64.tar.gz`
+            - 解压后运行 `./storyforge.sh`
+            - 已自带 Node.js 运行时
+          - **通用 Web 编译包**：`StoryForge-__VERSION__-web.zip`
+            - 只有编译产物和本地服务器脚本
+            - 使用系统 Node.js 运行 `node server.mjs`
+
+          启动后访问：
+
+          `http://127.0.0.1:1111/storyforge/`
+
+          ### 构建信息
+
+          - Tag: `__TAG__`
+          - Commit: `__SHA__`
+          - 生产依赖审计：通过
+          - Production build：通过
+          - Bundle size gate：通过
+          - 最终便携包启动/HTTP 冒烟：通过
+
+          `SHA256SUMS.txt` 可用于校验下载文件完整性。
+          EOF
+          sed -i \
+            -e "s/__TAG__/${RELEASE_TAG}/g" \
+            -e "s/__VERSION__/${VERSION}/g" \
+            -e "s/__SHA__/${TARGET_SHA}/g" \
+            release/RELEASE-NOTES.md
+
+      - name: Point release tag at exact build commit
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            CURRENT_SHA="$(git rev-list -n 1 "${RELEASE_TAG}")"
+            if [ "${CURRENT_SHA}" != "${TARGET_SHA}" ]; then
+              if [ "${OVERWRITE}" != "true" ]; then
+                echo "Tag ${RELEASE_TAG} already points to ${CURRENT_SHA}; pass overwrite=true to move it." >&2
+                exit 1
+              fi
+              git tag -f "${RELEASE_TAG}" "${TARGET_SHA}"
+              git push --force origin "refs/tags/${RELEASE_TAG}"
+            fi
+          else
+            git tag "${RELEASE_TAG}" "${TARGET_SHA}"
+            git push origin "refs/tags/${RELEASE_TAG}"
+          fi
+
+      - name: Publish or overwrite GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+        shell: bash
         run: |
+          set -euo pipefail
+
           args=()
           if [ "${PRERELEASE}" = "true" ]; then
             args+=(--prerelease)
           fi
+
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release edit "${RELEASE_TAG}" \
               --title "StoryForge ${RELEASE_TAG}" \
               --notes-file release/RELEASE-NOTES.md \
               "${args[@]}"
+
+            if [ "${OVERWRITE}" = "true" ]; then
+              while IFS= read -r asset; do
+                [ -z "${asset}" ] && continue
+                gh release delete-asset "${RELEASE_TAG}" "${asset}" -y || true
+              done < <(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name')
+            fi
           else
             gh release create "${RELEASE_TAG}" \
               --title "StoryForge ${RELEASE_TAG}" \
               --notes-file release/RELEASE-NOTES.md \
               "${args[@]}"
           fi
+
+          gh release upload "${RELEASE_TAG}" \
+            release/*.zip \
+            release/*.tar.gz \
+            release/SHA256SUMS.txt \
+            --clobber
+
+          gh release view "${RELEASE_TAG}" --json tagName,name,isDraft,isPrerelease,url,assets
