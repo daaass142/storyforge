@@ -1,0 +1,45 @@
+name: Dispatch compiled v3.10.0 release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/release-dispatch-v3.10.0.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Remove one-shot dispatcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/release-dispatch-v3.10.0.yml
+          git commit -m "chore(release): remove one-shot compiled release dispatcher"
+          git push origin HEAD:main
+
+      - name: Dispatch compiled release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml \
+            --repo daaass142/storyforge \
+            --ref main \
+            -f tag=v3.10.0 \
+            -f commit=f86468ecbc0f419b4518b31e4011bff65d9a1790 \
+            -f prerelease=false \
+            -f overwrite=true
